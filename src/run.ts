@@ -4,6 +4,7 @@ import { clearJwt, loadJwt, saveJwt } from "./credentials";
 import { CONSENT_VERSION, REPROMPT_CONSENT_TEXT } from "./consent";
 import { showIntro } from "./onboarding";
 import type { LaunchOptions } from "./pi-launch";
+import type { CatalogModel } from "./provider";
 import type { SelfUpdateOutcome } from "./self-update";
 import type { ClientVersionCheck } from "./update-check";
 import { CLI_VERSION } from "./version";
@@ -47,7 +48,7 @@ export interface RunDeps {
 }
 
 /** Runs the full device-flow login (device code -> consent -> poll), stores the JWT. */
-async function loginFlow(deps: RunDeps): Promise<string> {
+async function loginFlow(deps: Pick<RunDeps, "baseUrl" | "credentialsPath" | "log" | "openBrowser" | "sleep">): Promise<string> {
   const device = await startDeviceFlow(deps.baseUrl);
   deps.log(`\nOpen ${device.verification_uri} and enter code: ${device.user_code}\n`);
   deps.openBrowser(device.verification_uri);
@@ -59,33 +60,48 @@ async function loginFlow(deps: RunDeps): Promise<string> {
   return token;
 }
 
-/** Orchestrates first-run consent, login, token validation, and pi launch. Returns the process exit code. */
-function parseSessionArg(argv: readonly string[]): { session?: string; error?: string } {
-  const flagIndex = argv.indexOf("--session");
-  if (flagIndex === -1) return {};
+/** Everything run() needs before launchPi: the same deps minus the launcher. */
+export type PrelaunchDeps = Omit<RunDeps, "launchPi">;
 
-  const value = argv[flagIndex + 1];
-  if (!value || value.startsWith("--")) {
-    return { error: "Missing value for --session" };
-  }
-
-  try {
-    // The public SDK entry point does not re-export assertValidSessionId in
-    // 0.84.2, but SessionManager's public constructor invokes that exact SDK
-    // validator. In-memory keeps this validation side-effect free.
-    SessionManager.inMemory(process.cwd(), { id: value });
-  } catch (err) {
-    return { error: `Invalid --session value: ${err instanceof Error ? err.message : String(err)}` };
-  }
-
-  return { session: value };
+/** Headless callers (ACP) must route this log to stderr: stdout is the protocol channel. */
+export interface PrelaunchSuccess {
+  jwt: string;
+  session?: string;
+  model?: string;
+  models?: CatalogModel[];
+  fusion?: { planner: string; executor: string };
+  updateLatest?: string;
+  notice?: string;
+  getGravityContext?: () => string | undefined;
 }
 
-export async function run(deps: RunDeps, argv: readonly string[] = process.argv): Promise<number> {
+export type PrelaunchResult = { ok: true } & PrelaunchSuccess | { ok: false; exitCode: number };
+
+/** Shown when a headless run has no usable credential — login needs a terminal. */
+export const HEADLESS_LOGIN_REQUIRED =
+  "free-pi-cli is not signed in (or the sign-in expired). Run `free-pi-cli` once in a terminal to sign in, then retry.";
+
+/**
+ * Shared pre-launch gate: consent → login → token check → version check →
+ * self-update → notices → Gravity pixel. Both the TUI path (run) and the
+ * headless ACP path call this, so neither can drift weaker on auth/consent.
+ *
+ * headless=true changes only the interactive steps: no consent prompt, no
+ * device-flow login, no re-consent prompt — each becomes a stderr message +
+ * nonzero exit, never an accept-on-the-user's-behalf. The declined-consent
+ * invariant (ZERO server calls) holds on both paths: every early return below
+ * precedes checkClientVersion.
+ */
+export async function runPrelaunchGate(
+  deps: PrelaunchDeps,
+  argv: readonly string[] = process.argv,
+  opts: { headless?: boolean } = {},
+): Promise<PrelaunchResult> {
+  const headless = opts.headless === true;
   const sessionArg = parseSessionArg(argv);
   if (sessionArg.error) {
     deps.log(sessionArg.error);
-    return 1;
+    return { ok: false, exitCode: 1 };
   }
 
   let jwt = await loadJwt(deps.credentialsPath);
@@ -99,9 +115,13 @@ export async function run(deps: RunDeps, argv: readonly string[] = process.argv)
       // Declining asks again next startup (nothing is remembered locally).
       consentCurrent = serverConsent === CONSENT_VERSION;
       if (serverConsent !== undefined && serverConsent !== CONSENT_VERSION) {
+        if (headless) {
+          deps.log("free-pi's terms changed since you last signed in. Run `free-pi-cli` once in a terminal to review and accept, then retry.");
+          return { ok: false, exitCode: 1 };
+        }
         if (!(await deps.promptConsent(REPROMPT_CONSENT_TEXT))) {
           deps.log("Declined. free-pi needs you to accept the updated terms to continue; you will be asked again next time.");
-          return 1;
+          return { ok: false, exitCode: 1 };
         }
         consentCurrent = true;
         try {
@@ -123,10 +143,14 @@ export async function run(deps: RunDeps, argv: readonly string[] = process.argv)
   }
 
   if (!jwt) {
+    if (headless) {
+      deps.log(HEADLESS_LOGIN_REQUIRED);
+      return { ok: false, exitCode: 1 };
+    }
     const accepted = await deps.promptConsent();
     if (!accepted) {
       deps.log("Declined. Exiting without contacting the free-pi server.");
-      return 1;
+      return { ok: false, exitCode: 1 };
     }
     // #63: first-run onboarding — shown here (first-run only) above the
     // device-login instructions the user must read, so it survives the pi TUI
@@ -148,12 +172,12 @@ export async function run(deps: RunDeps, argv: readonly string[] = process.argv)
     // #37 U1: try an in-place self-update first; only fall back to the
     // phase-1 notice/hard-stop text when self-update itself falls back.
     const outcome = await deps.maybeSelfUpdate(versionCheck.action, versionCheck.latest);
-    if (outcome === "updated-exit") return 0;
+    if (outcome === "updated-exit") return { ok: false, exitCode: 0 };
     if (outcome === "blocked") {
       const relaunched = await deps.relaunchLatest?.(versionCheck.latest);
-      if (relaunched !== undefined) return relaunched;
+      if (relaunched !== undefined) return { ok: false, exitCode: relaunched };
       deps.log("free-pi-cli is below the required minimum version; update with: npx free-pi-cli@latest");
-      return 1;
+      return { ok: false, exitCode: 1 };
     }
     if (outcome === "notice") {
       // Carried into the session header as a boxed "Update Available" banner
@@ -184,16 +208,55 @@ export async function run(deps: RunDeps, argv: readonly string[] = process.argv)
     }
   }
 
-  const finalSessionId = await deps.launchPi({
-    baseUrl: deps.baseUrl,
+  return {
+    ok: true,
     jwt,
-    agentDir: deps.agentDir,
     session: sessionArg.session,
     model: versionCheck.model,
     models: versionCheck.models,
     fusion: versionCheck.fusion,
     updateLatest,
+    notice: versionCheck.notice,
     getGravityContext,
+  };
+}
+
+/** Orchestrates first-run consent, login, token validation, and pi launch. Returns the process exit code. */
+function parseSessionArg(argv: readonly string[]): { session?: string; error?: string } {
+  const flagIndex = argv.indexOf("--session");
+  if (flagIndex === -1) return {};
+
+  const value = argv[flagIndex + 1];
+  if (!value || value.startsWith("--")) {
+    return { error: "Missing value for --session" };
+  }
+
+  try {
+    // The public SDK entry point does not re-export assertValidSessionId in
+    // 0.84.2, but SessionManager's public constructor invokes that exact SDK
+    // validator. In-memory keeps this validation side-effect free.
+    SessionManager.inMemory(process.cwd(), { id: value });
+  } catch (err) {
+    return { error: `Invalid --session value: ${err instanceof Error ? err.message : String(err)}` };
+  }
+
+  return { session: value };
+}
+
+export async function run(deps: RunDeps, argv: readonly string[] = process.argv): Promise<number> {
+  const gate = await runPrelaunchGate(deps, argv);
+  if (!gate.ok) return gate.exitCode;
+
+  const finalSessionId = await deps.launchPi({
+    baseUrl: deps.baseUrl,
+    jwt: gate.jwt,
+    agentDir: deps.agentDir,
+    session: gate.session,
+    model: gate.model,
+    models: gate.models,
+    fusion: gate.fusion,
+    updateLatest: gate.updateLatest,
+    getGravityContext: gate.getGravityContext,
   });
 
   // First user feedback (2026-08-17): after closing the terminal, users didn't

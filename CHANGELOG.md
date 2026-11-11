@@ -5,6 +5,19 @@ All notable changes to `free-pi-cli`. Format based on [Keep a Changelog](https:/
 The short highlights shown in the CLI at startup live in `src/changelog.ts` (bundled into the
 build); this file is the fuller human record.
 
+## [Unreleased]
+
+### Added
+- `free-pi-cli acp`: headless Agent Client Protocol server over stdio, so an ACP
+  client (e.g. Zed) can spawn the agent and drive it with `initialize`,
+  `session/new`, `session/load`, `session/list`, `session/prompt`,
+  `session/cancel`, `session/set_model`, and `usage`. It runs the same
+  consent/login/version gate as the TUI (sign in once with `free-pi-cli`
+  first — ACP never prompts), reuses the identical runtime wiring (same 17
+  extensions, same tool allowlist and guard, same model lock), and keeps
+  stdout protocol-clean (all human logs go to stderr). Project folders default
+  to untrusted unless the client sends `trusted: true`.
+
 ## [0.4.10] - 2026-10-21
 
 ### Added

@@ -1,4 +1,4 @@
-// Pure argv parsing for the local commands (help / version / logout / mcp) and the
+// Pure argv parsing for the local commands (help / version / logout / mcp / acp) and the
 // `--session <id>` resume flag, extracted from index.ts (untestable: main() runs on import) as a test seam.
 //
 // Privacy note, same invariant as run()'s decline path: none of the commands
@@ -14,6 +14,7 @@ export type CliCommand =
   | { kind: "version" }
   | { kind: "logout" }
   | { kind: "mcp"; args: string[] }
+  | { kind: "acp" }
   | { kind: "unknown"; arg: string };
 
 export const HELP_TEXT = `
@@ -25,6 +26,8 @@ Usage:
   free-pi-cli logout          remove the stored sign-in token; the next run signs in again
   free-pi-cli mcp <command>   add, remove, list, or sign in to your own MCP servers
                               (free-pi-cli mcp --help for details)
+  free-pi-cli acp             run as an Agent Client Protocol server over stdio
+                              (headless: for editors like Zed; sign in first with free-pi-cli)
   free-pi-cli --version       print the CLI version
   free-pi-cli --help          show this help
 
@@ -51,6 +54,10 @@ export function parseCliArgs(argv: readonly string[]): CliCommand {
 
   // Everything after `mcp` belongs to pi's mcp command, so pass it through untouched.
   if (first === "mcp") return { kind: "mcp", args: rest };
+
+  // `acp` is a fixed headless mode with no subcommands — trailing args are a
+  // typo, same policy as logout (never silently start a token-burning session).
+  if (first === "acp") return rest.length > 0 ? { kind: "unknown", arg: rest[0] as string } : { kind: "acp" };
 
   // run.ts reads and validates the value itself (incl. the missing-value message).
   if (first === "--session") {

@@ -8,6 +8,7 @@ import { clearJwt, loadJwt } from "./credentials";
 import { resolveBaseUrl } from "./env";
 import { runLogout } from "./logout";
 import { runFreePiMcp } from "./mcp-command";
+import { runFreePiAcp } from "./acp-command";
 import { getConfigPath, getCredentialsPath, getFreePiAgentDir } from "./paths";
 import { startGravityPixel } from "./gravity-pixel";
 import { launchPi } from "./pi-launch";
@@ -73,6 +74,19 @@ async function main(): Promise<void> {
   }
 
   const agentDir = getFreePiAgentDir();
+
+  if (command.kind === "acp") {
+    // ACP mode: stdout is the JSON-RPC protocol channel. Every human-facing
+    // log routes to stderr; only protocol frames may touch stdout.
+    const acpCode = await runFreePiAcp({
+      baseUrl: resolveBaseUrl(),
+      agentDir,
+      credentialsPath: getCredentialsPath(agentDir),
+      log: (line) => console.error(line),
+      notify: (frame) => process.stdout.write(`${frame}\n`),
+    });
+    process.exit(acpCode);
+  }
   const code = await run({
     baseUrl: resolveBaseUrl(),
     agentDir,

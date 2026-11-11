@@ -1,4 +1,5 @@
 import {
+  AgentSessionRuntime,
   createAgentSessionFromServices,
   createAgentSessionRuntime,
   createAgentSessionServices,
@@ -63,8 +64,9 @@ export interface LaunchOptions {
 }
 
 /** The models to register + scope the picker to: the server catalog when it
- * sent one, else the single active model (back-compat with a plain response). */
-function catalogModelsFor(opts: LaunchOptions): CatalogModel[] {
+ * sent one, else the single active model (back-compat with a plain response).
+ * Exported for the ACP path, which validates session/set_model against it. */
+export function catalogModelsFor(opts: LaunchOptions): CatalogModel[] {
   if (opts.models && opts.models.length > 0) return opts.models;
   const id = opts.model || MODEL_ID;
   return [{ id, name: id }];
@@ -332,7 +334,11 @@ export function buildRuntimeOptions(opts: LaunchOptions, sessionId: string): Run
  * real pi SDK integration below is exercised only when the bin is actually
  * run, never in `bun test` (starting the real TUI needs a real terminal).
  */
-function getSessionDir(cwd: string, agentDir: string): string {
+/**
+ * Session directory for a cwd: exported so the ACP path stores sessions in
+ * exactly the same place (resumable from either mode by id).
+ */
+export function getSessionDir(cwd: string, agentDir: string): string {
   const resolvedCwd = resolve(cwd);
   const safePath = `--${resolvedCwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
   return join(resolve(agentDir), "sessions", safePath);
@@ -380,19 +386,34 @@ process.env.PI_TELEMETRY = "0";
 // Same brand-leak problem at the other end of the session: pi's exit path
 // prints "To resume this session: pi --session <id>" straight to stdout and
 // then exits the process. See resume-line.ts.
-patchResumeLine(process.stdout);
+export const restoreResumeLinePatch: () => void = patchResumeLine(process.stdout);
 
-export async function launchPi(opts: LaunchOptions): Promise<string> {
-  const cwd = process.cwd();
-  const sessionDir = getSessionDir(cwd, opts.agentDir);
-  const sm = await createSessionManager(cwd, sessionDir, opts.session);
+export interface AgentRuntimeHandles {
+  runtime: AgentSessionRuntime;
+  sessionManager: SessionManager;
+  /** The pi logical session id — the lease key shared by provider and ads. */
+  sessionId: string;
+}
 
+/**
+ * Shared runtime construction: identical wiring for the TUI (launchPi) and
+ * the headless ACP loop — per-cwd trust via settingsForRuntime, the free-pi
+ * model lock via resolveFreePiScope, and the closed SDK_TOOLS allowlist via
+ * buildRuntimeOptions. Neither path may fork this: same extensions, same
+ * tools, same system prompt and skills.
+ */
+export async function buildAgentRuntime(
+  opts: LaunchOptions,
+  cwd: string,
+  sm: SessionManager,
+  projectTrusted: boolean,
+): Promise<AgentRuntimeHandles> {
   // The pi logical session id is the lease key shared by the provider and ads.
   const sessionId = sm.getSessionId();
   const scopeIds = catalogModelsFor(opts).map((m) => m.id);
-  const projectTrusted = await decideProjectTrustInteractive(cwd, opts.agentDir);
   const { resourceLoaderOptions, tools } = buildRuntimeOptions({ ...opts, projectTrusted }, sessionId);
   const launchTrust = { cwd, trusted: projectTrusted };
+  const agentDir = opts.agentDir;
 
   const createRuntime: CreateAgentSessionRuntimeFactory = async ({
     cwd: rtCwd,
@@ -401,7 +422,7 @@ export async function launchPi(opts: LaunchOptions): Promise<string> {
   }) => {
     const services = await createAgentSessionServices({
       cwd: rtCwd,
-      agentDir: opts.agentDir,
+      agentDir,
       // Trust is per folder: /resume may switch to a session from another one.
       settingsManager: settingsForRuntime(opts, rtCwd, launchTrust),
       resourceLoaderOptions,
@@ -424,9 +445,19 @@ export async function launchPi(opts: LaunchOptions): Promise<string> {
 
   const runtime = await createAgentSessionRuntime(createRuntime, {
     cwd,
-    agentDir: opts.agentDir,
+    agentDir,
     sessionManager: sm,
   });
+  return { runtime, sessionManager: sm, sessionId };
+}
+
+export async function launchPi(opts: LaunchOptions): Promise<string> {
+  const cwd = process.cwd();
+  const sessionDir = getSessionDir(cwd, opts.agentDir);
+  const sm = await createSessionManager(cwd, sessionDir, opts.session);
+
+  const projectTrusted = await decideProjectTrustInteractive(cwd, opts.agentDir);
+  const { runtime } = await buildAgentRuntime(opts, cwd, sm, projectTrusted);
 
   const mode = new InteractiveMode(runtime, {
     initialImages: [],
