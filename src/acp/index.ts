@@ -117,12 +117,23 @@ function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-/** Best-effort text delta from a message_update event (SDK shape varies). */
+/** Best-effort text delta from a message_update event. Only `text_delta`
+ * counts as response text — thinking and toolcall-argument deltas share the
+ * same `{ delta }` shape and must never leak into the answer (they arrived
+ * inline in client transcripts before this gate existed). */
 function textDeltaOf(event: AgentSessionEvent): string | undefined {
   const e = (event as unknown as Record<string, unknown>).assistantMessageEvent as Record<string, unknown> | undefined;
-  if (!e || typeof e !== "object") return undefined;
+  if (!e || typeof e !== "object" || e.type !== "text_delta") return undefined;
   if (typeof e.delta === "string" && e.delta !== "") return e.delta;
   if (typeof e.text === "string" && e.text !== "") return e.text;
+  return undefined;
+}
+
+/** Reasoning deltas ride their own update so clients can render (or hide) thinking separately from the answer. */
+function thoughtDeltaOf(event: AgentSessionEvent): string | undefined {
+  const e = (event as unknown as Record<string, unknown>).assistantMessageEvent as Record<string, unknown> | undefined;
+  if (!e || typeof e !== "object" || e.type !== "thinking_delta") return undefined;
+  if (typeof e.delta === "string" && e.delta !== "") return e.delta;
   return undefined;
 }
 
@@ -485,6 +496,11 @@ export class AcpServer {
         if (delta !== undefined) {
           hooks.trackDelta(1);
           this.update(sessionId, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: delta } });
+          break;
+        }
+        const thought = thoughtDeltaOf(event);
+        if (thought !== undefined) {
+          this.update(sessionId, { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: thought } });
         }
         break;
       }

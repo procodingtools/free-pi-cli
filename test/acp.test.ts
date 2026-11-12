@@ -184,8 +184,12 @@ function fakeBuildRuntime(state: FakeSessionState) {
           for (const fn of state.listeners) fn(e);
         };
         emit({ type: "message_start" } as never);
-        emit({ type: "message_update", assistantMessageEvent: { delta: "hello " } } as never);
-        emit({ type: "message_update", assistantMessageEvent: { delta: "world" } } as never);
+        emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "hello " } } as never);
+        // Reasoning and toolcall-arg deltas share the { delta } shape: they
+        // must ride thought frames (or nothing), never the answer text.
+        emit({ type: "message_update", assistantMessageEvent: { type: "thinking_delta", delta: "secret thought" } } as never);
+        emit({ type: "message_update", assistantMessageEvent: { type: "toolcall_delta", delta: '{"name":' } } as never);
+        emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "world" } } as never);
         emit({ type: "tool_execution_start", toolCallId: "t1", toolName: "read" } as never);
         emit({ type: "tool_execution_end", toolCallId: "t1", toolName: "read", result: "file!" } as never);
         emit({ type: "message_end", message: { content: "hello world" } } as never);
@@ -273,6 +277,15 @@ describe("AcpServer dispatch (fake runtime)", () => {
       .map((u) => u.params.update.content.text)
       .join("");
     expect(text).toContain("hello world");
+    // Reasoning and toolcall-arg deltas never leak into the answer text.
+    expect(text).not.toContain("secret thought");
+    expect(text).not.toContain('{"name":');
+    // Thinking rides its own frame so clients can render (or hide) it.
+    const thoughts = updates
+      .filter((u) => u.params.update.sessionUpdate === "agent_thought_chunk")
+      .map((u) => u.params.update.content.text)
+      .join("");
+    expect(thoughts).toContain("secret thought");
   });
 
   test("session/prompt on an unknown session is an error, not a crash", async () => {
