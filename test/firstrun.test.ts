@@ -96,9 +96,6 @@ function baseDeps(overrides: Partial<RunDeps> & Pick<RunDeps, "baseUrl" | "agent
     launchPi: async () => {},
     log: () => {},
     checkClientVersion: async () => ({ action: "ok" }),
-    // #37 U1: mirrors self-update's own fallback so existing block/notice
-    // expectations are unchanged unless a test opts in with an override.
-    maybeSelfUpdate: async (action) => (action === "notice" ? "notice" : "blocked"),
     ...overrides,
   };
 }
@@ -110,7 +107,6 @@ describe("first-run consent", () => {
     let consentShown = false;
     let piLaunched = false;
     let versionCheckCalled = false;
-    let selfUpdateCalled = false;
 
     const code = await run(
       baseDeps({
@@ -130,12 +126,6 @@ describe("first-run consent", () => {
           versionCheckCalled = true;
           return { action: "ok" };
         },
-        // #37 U1/R5: self-update is only reached past the consent gate, so a
-        // decline must never invoke it either.
-        maybeSelfUpdate: async (action) => {
-          selfUpdateCalled = true;
-          return action === "notice" ? "notice" : "blocked";
-        },
       }),
     );
 
@@ -143,7 +133,6 @@ describe("first-run consent", () => {
     expect(consentShown).toBe(true);
     expect(piLaunched).toBe(false);
     expect(versionCheckCalled).toBe(false);
-    expect(selfUpdateCalled).toBe(false);
     expect(stub.requests.length).toBe(0);
     stub.stop();
   });
@@ -375,59 +364,8 @@ describe("forced-update hard-stop (R2, #37)", () => {
   });
 });
 
-describe("self-update wiring in run.ts (#37 U1)", () => {
-  test("below-min + self-update succeeds -> exit 0, does NOT launch pi (re-run required)", async () => {
-    const stub = startStub();
-    const dir = tempDir();
-    let piLaunched = false;
-    let selfUpdateArgs: { action: string; latest: string | undefined } | undefined;
-
-    const code = await run(
-      baseDeps({
-        baseUrl: stub.url,
-        agentDir: dir,
-        credentialsPath: join(dir, "credentials.json"),
-        launchPi: async () => {
-          piLaunched = true;
-        },
-        checkClientVersion: async () => ({ action: "block", latest: "0.9.0" }),
-        maybeSelfUpdate: async (action, latest) => {
-          selfUpdateArgs = { action, latest };
-          return "updated-exit";
-        },
-      }),
-    );
-
-    expect(code).toBe(0);
-    expect(piLaunched).toBe(false);
-    expect(selfUpdateArgs).toEqual({ action: "block", latest: "0.9.0" });
-    stub.stop();
-  });
-
-  test("below-min + self-update disabled/falls back -> exit 1 (unchanged phase-1 hard-stop)", async () => {
-    const stub = startStub();
-    const dir = tempDir();
-    let piLaunched = false;
-
-    const code = await run(
-      baseDeps({
-        baseUrl: stub.url,
-        agentDir: dir,
-        credentialsPath: join(dir, "credentials.json"),
-        launchPi: async () => {
-          piLaunched = true;
-        },
-        checkClientVersion: async () => ({ action: "block", latest: "0.9.0" }),
-        maybeSelfUpdate: async () => "blocked",
-      }),
-    );
-
-    expect(code).toBe(1);
-    expect(piLaunched).toBe(false);
-    stub.stop();
-  });
-
-  test("notice + self-update succeeds -> updated-continue, still launches pi this run", async () => {
+describe("version gate in run.ts (no self-update: notice rides the banner, block hard-stops)", () => {
+  test("below-min -> exit 1 with the manual update message, does NOT launch pi", async () => {
     const stub = startStub();
     const dir = tempDir();
     let piLaunched = false;
@@ -442,20 +380,17 @@ describe("self-update wiring in run.ts (#37 U1)", () => {
         launchPi: async () => {
           piLaunched = true;
         },
-        checkClientVersion: async () => ({ action: "notice", latest: "0.9.0" }),
-        maybeSelfUpdate: async () => "updated-continue",
+        checkClientVersion: async () => ({ action: "block", latest: "0.9.0" }),
       }),
     );
 
-    expect(code).toBe(0);
-    expect(piLaunched).toBe(true);
-    // run.ts must not print the phase-1 "update available" text when
-    // self-update already handled and logged it — that would be a duplicate.
-    expect(logs.some((l) => l.includes("update available"))).toBe(false);
+    expect(code).toBe(1);
+    expect(piLaunched).toBe(false);
+    expect(logs).toContain("free-pi-cli is below the required minimum version; update with: npx free-pi-cli@latest");
     stub.stop();
   });
 
-  test("notice + self-update falls back -> carries the version into the header banner and launches pi", async () => {
+  test("notice -> carries the version into the header banner and launches pi", async () => {
     const stub = startStub();
     const dir = tempDir();
     let piLaunched = false;
@@ -473,7 +408,6 @@ describe("self-update wiring in run.ts (#37 U1)", () => {
           launchedWith = opts;
         },
         checkClientVersion: async () => ({ action: "notice", latest: "0.9.0" }),
-        maybeSelfUpdate: async () => "notice",
       }),
     );
 
@@ -618,7 +552,6 @@ describe("consent re-prompt for existing users", () => {
     const stub = startStub({ meConsentVersion, consentPostStatus });
     const promptTexts: Array<string | undefined> = [];
     let versionChecks = 0;
-    let selfUpdates = 0;
     let launchedJwt: string | undefined;
     const dir = tempDir();
     const credentialsPath = join(dir, "credentials.json");
@@ -644,16 +577,12 @@ describe("consent re-prompt for existing users", () => {
           versionChecks++;
           return { action: "ok" };
         },
-        maybeSelfUpdate: async () => {
-          selfUpdates++;
-          return "blocked";
-        },
         log: (m) => logs.push(m),
       }),
     );
     stub.stop();
     const posted = stub.requests.some((r) => r.method === "POST" && r.path === "/me/consent");
-    return { code, prompted, launched, posted, logs, promptTexts, versionChecks, selfUpdates, launchedJwt };
+    return { code, prompted, launched, posted, logs, promptTexts, versionChecks, launchedJwt };
   }
 
   test("outdated version + accept -> POST /me/consent, session continues", async () => {
@@ -677,7 +606,6 @@ describe("consent re-prompt for existing users", () => {
     expect(r.posted).toBe(false);
     expect(r.launched).toBe(false);
     expect(r.versionChecks).toBe(0);
-    expect(r.selfUpdates).toBe(0);
   });
 
   test("re-prompt passes the re-prompt text variant", async () => {
@@ -715,13 +643,10 @@ describe("consent re-prompt for existing users", () => {
   });
 });
 
-describe("required-update relaunch wiring in run.ts", () => {
+describe("required-update hard-stop in run.ts (no relaunch: below-min always exits 1)", () => {
   const BELOW_MIN_MSG = "free-pi-cli is below the required minimum version; update with: npx free-pi-cli@latest";
 
-  async function runBlocked(opts: {
-    relaunch?: RunDeps["relaunchLatest"];
-    check?: Awaited<ReturnType<RunDeps["checkClientVersion"]>>;
-  }) {
+  async function runBlocked(check: Awaited<ReturnType<RunDeps["checkClientVersion"]>> = { action: "block", latest: "0.9.0" }) {
     const stub = startStub();
     const dir = tempDir();
     let piLaunched = false;
@@ -734,8 +659,7 @@ describe("required-update relaunch wiring in run.ts", () => {
         launchPi: async () => {
           piLaunched = true;
         },
-        checkClientVersion: async () => opts.check ?? { action: "block", latest: "0.9.0" },
-        relaunchLatest: opts.relaunch,
+        checkClientVersion: async () => check,
         log: (m) => logs.push(m),
       }),
     );
@@ -743,63 +667,36 @@ describe("required-update relaunch wiring in run.ts", () => {
     return { code, piLaunched, logs };
   }
 
-  test("below-min + relaunch ran -> returns the relaunched process's exit code, no pi launch, no fallback message", async () => {
-    let seenLatest: string | undefined;
-    const r = await runBlocked({
-      relaunch: async (latest) => {
-        seenLatest = latest;
-        return 0;
-      },
-    });
-    expect(seenLatest).toBe("0.9.0");
-    expect(r.code).toBe(0);
-    expect(r.piLaunched).toBe(false);
-    expect(r.logs).not.toContain(BELOW_MIN_MSG);
-  });
-
-  test("below-min + relaunched child exits 3 -> run() exits 3", async () => {
-    const r = await runBlocked({ relaunch: async () => 3 });
-    expect(r.code).toBe(3);
-  });
-
-  test("below-min + relaunch declined/failed (undefined) -> today's message and exit 1", async () => {
-    const r = await runBlocked({ relaunch: async () => undefined });
+  test("below-min -> today's message and exit 1, no pi launch", async () => {
+    const r = await runBlocked();
     expect(r.code).toBe(1);
     expect(r.piLaunched).toBe(false);
     expect(r.logs).toContain(BELOW_MIN_MSG);
   });
 
-  test("optional update (notice) never relaunches", async () => {
-    let relaunched = false;
-    const r = await runBlocked({
-      check: { action: "notice", latest: "0.9.0" },
-      relaunch: async () => {
-        relaunched = true;
-        return 0;
-      },
-    });
-    expect(relaunched).toBe(false);
+  test("optional update (notice) launches pi, no hard-stop", async () => {
+    const r = await runBlocked({ action: "notice", latest: "0.9.0" });
+    expect(r.code).toBe(0);
     expect(r.piLaunched).toBe(true);
   });
 
-  test("a declined first-run consent still makes zero server calls and never relaunches", async () => {
+  test("a declined first-run consent still makes zero server calls and never launches", async () => {
     const stub = startStub();
     const dir = tempDir();
-    let relaunched = false;
+    let launched = false;
     const code = await run(
       baseDeps({
         baseUrl: stub.url,
         agentDir: dir,
         credentialsPath: join(dir, "credentials.json"),
         promptConsent: async () => false,
-        relaunchLatest: async () => {
-          relaunched = true;
-          return 0;
+        launchPi: async () => {
+          launched = true;
         },
       }),
     );
     expect(code).not.toBe(0);
-    expect(relaunched).toBe(false);
+    expect(launched).toBe(false);
     expect(stub.requests.length).toBe(0);
     stub.stop();
   });

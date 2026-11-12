@@ -48,9 +48,9 @@ export interface LaunchOptions {
   models?: CatalogModel[];
   /** Server-chosen Fusion planner/executor ids (from /client-version). */
   fusion?: { planner: string; executor: string };
-  /** A newer free-pi-cli version, when /client-version reported one and the
-   * self-update fell back to notifying. Renders the header's update banner —
-   * free-pi's replacement for pi's own (suppressed) `pi update` banner. */
+  /** A newer free-pi-cli version, when /client-version reported one.
+   * Renders the header's update banner — free-pi's replacement for pi's own
+   * (suppressed) `pi update` banner. */
   updateLatest?: string;
   /** Base64url Gravity context for the ads extension's /ads/next header; undefined when the pixel is off or not ready. */
   getGravityContext?: () => string | undefined;

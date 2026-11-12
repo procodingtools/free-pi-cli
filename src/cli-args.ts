@@ -33,7 +33,6 @@ Usage:
 
 Environment:
   FREEPI_BASE_URL        override the backend base URL (default https://api.freepi.ai)
-  FREEPI_NO_AUTO_UPDATE  disable in-place self-update for this run
   FREEPI_NO_GRAVITY_PIXEL=1  do not run Gravity's ad-measurement pixel
 `.trim();
 

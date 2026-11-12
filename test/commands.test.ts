@@ -103,31 +103,10 @@ describe("/whats-new (showWhatsNew)", () => {
 });
 
 describe("/update (runUpdate)", () => {
-  test("npx run → reports already-latest, does not install", async () => {
+  test("points at the manual update command and never spawns anything", async () => {
     const { ctx, notes } = notifyCtx();
-    let installed = false;
-    await runUpdate(ctx, {
-      env: { npm_command: "exec" },
-      installLatest: async () => {
-        installed = true;
-        return { ok: true };
-      },
-    });
-    expect(installed).toBe(false);
-    expect(notes[0]?.msg).toContain("always fetches the latest");
-  });
-
-  test("global install, success → 'Updated — restart'", async () => {
-    const { ctx, notes } = notifyCtx();
-    await runUpdate(ctx, { env: {}, installLatest: async () => ({ ok: true }) });
-    expect(notes.at(-1)?.msg).toContain("Updated");
+    await runUpdate(ctx);
     expect(notes.at(-1)?.type).toBe("info");
-  });
-
-  test("global install, failure → friendly error with manual command", async () => {
-    const { ctx, notes } = notifyCtx();
-    await runUpdate(ctx, { env: {}, installLatest: async () => ({ ok: false }) });
-    expect(notes.at(-1)?.type).toBe("error");
     expect(notes.at(-1)?.msg).toContain("npm install -g free-pi-cli@latest");
   });
 });

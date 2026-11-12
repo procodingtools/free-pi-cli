@@ -56,7 +56,7 @@ describe("parseCliArgs — local command dispatch", () => {
 
 describe("help/version text", () => {
   test("help documents every command and the env overrides", () => {
-    for (const needle of ["logout", "--session", "--version", "--help", "FREEPI_BASE_URL", "FREEPI_NO_AUTO_UPDATE"]) {
+    for (const needle of ["logout", "--session", "--version", "--help", "FREEPI_BASE_URL"]) {
       expect(HELP_TEXT).toContain(needle);
     }
   });

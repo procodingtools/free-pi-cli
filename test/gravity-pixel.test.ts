@@ -141,7 +141,6 @@ describe("run(): pixel starts only after consent for the current version", () =>
       },
       log: () => {},
       checkClientVersion: async () => ({ action: "ok" }),
-      maybeSelfUpdate: async () => "blocked",
       startGravityPixel: () => {
         started++;
         if (opts.pixelThrows) throw new Error("boom");

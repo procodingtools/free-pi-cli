@@ -78,55 +78,12 @@ export function showWhatsNew(ctx: NotifyContext): void {
 
 // ---- /update --------------------------------------------------------------
 
-export interface UpdateDeps {
-  env?: Record<string, string | undefined>;
-  /** Installs free-pi-cli@latest globally; injected in tests. */
-  installLatest?: () => Promise<{ ok: boolean }>;
-}
-
-function isEphemeralNpx(env: Record<string, string | undefined>): boolean {
-  return env.npm_command === "exec" || env.npm_lifecycle_event === "npx";
-}
-
-async function defaultInstallLatest(): Promise<{ ok: boolean }> {
-  const { spawn } = await import("node:child_process");
-  return new Promise((resolve) => {
-    // shell on win32: npm is `npm.cmd`, a batch file. Node refuses to spawn a
-    // .cmd without a shell (CVE-2024-27980 hardening), so this resolved
-    // { ok: false } on every Windows /update. Same root cause as the
-    // self-update spawn — the command is a fixed literal, no quoting surface.
-    const child = spawn("npm", ["install", "-g", "free-pi-cli@latest"], {
-      stdio: "ignore",
-      shell: process.platform === "win32",
-    });
-    child.on("error", () => resolve({ ok: false }));
-    child.on("close", (code) => resolve({ ok: code === 0 }));
-  });
-}
-
 /**
- * On-demand update. An npx run is always the latest by definition, so it's a
- * no-op there; a global install runs `npm install -g free-pi-cli@latest`.
- * Never throws.
+ * No installer left: self-update and the npx relaunch are gone, so /update
+ * only tells the user how to update manually. Never spawns anything.
  */
-export async function runUpdate(ctx: NotifyContext, deps: UpdateDeps = {}): Promise<void> {
-  const env = deps.env ?? process.env;
-  if (isEphemeralNpx(env)) {
-    ctx.ui.notify("You're running via npx, which always fetches the latest — you're already up to date.", "info");
-    return;
-  }
-  ctx.ui.notify("Updating free-pi-cli… (npm install -g free-pi-cli@latest)", "info");
-  try {
-    const { ok } = await (deps.installLatest ?? defaultInstallLatest)();
-    ctx.ui.notify(
-      ok
-        ? "Updated — restart free-pi-cli to use the new version."
-        : "Update failed. Try manually: npm install -g free-pi-cli@latest",
-      ok ? "info" : "error",
-    );
-  } catch {
-    ctx.ui.notify("Update failed. Try manually: npm install -g free-pi-cli@latest", "error");
-  }
+export async function runUpdate(ctx: NotifyContext): Promise<void> {
+  ctx.ui.notify("To update free-pi-cli, run: npm install -g free-pi-cli@latest (npx always fetches the latest).", "info");
 }
 
 // ---- /buy-credits ---------------------------------------------------------

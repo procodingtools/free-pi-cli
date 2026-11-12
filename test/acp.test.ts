@@ -88,9 +88,6 @@ describe("runFreePiAcp headless gate", () => {
       checkClientVersion: async () => {
         throw new Error("must not check version without consent");
       },
-      maybeSelfUpdate: async () => {
-        throw new Error("must not self-update without consent");
-      },
     });
     expect(code).not.toBe(0);
     expect(stderr.join("\n")).toMatch(/sign in|free-pi-cli/);
@@ -119,7 +116,6 @@ describe("runFreePiAcp headless gate", () => {
         notify: () => {},
         input: endedInput(),
         checkClientVersion: async () => ({ action: "ok" }),
-        maybeSelfUpdate: async () => "blocked",
       });
       expect(code).not.toBe(0);
       expect(stderr.join("\n")).toMatch(/sign in/);

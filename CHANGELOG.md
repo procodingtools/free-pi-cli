@@ -7,6 +7,13 @@ build); this file is the fuller human record.
 
 ## [Unreleased]
 
+### Removed
+- Self-update is gone: no in-place `npm` install attempt, no `npx` relaunch on
+  a required update, no `FREEPI_NO_AUTO_UPDATE` / `~/.free-pi/config.json` opt-out
+  (nothing reads it anymore). A below-minimum version now always hard-stops with
+  the manual `npx free-pi-cli@latest` message; an optional update still rides the
+  session header banner. The consent text no longer discloses auto-updating.
+
 ### Added
 - `free-pi-cli acp`: headless Agent Client Protocol server over stdio, so an ACP
   client (e.g. Zed) can spawn the agent and drive it with `initialize`,

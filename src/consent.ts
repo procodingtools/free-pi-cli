@@ -18,8 +18,6 @@ free-pi — before you start
     expressed or implied, and no guarantee of uptime.
   * If GitHub email capture is enabled, we collect your GitHub email and may
     use it to contact you about the service or product.
-  * free-pi-cli auto-updates itself when a new version is available. Disable
-    with FREEPI_NO_AUTO_UPDATE or {"autoUpdate":false} in ~/.free-pi/config.json.
 
 By accepting you agree to the Terms of Service (https://freepi.ai/terms)
 and the Privacy Policy (https://freepi.ai/privacy).

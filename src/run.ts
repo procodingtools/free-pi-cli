@@ -5,7 +5,6 @@ import { CONSENT_VERSION, REPROMPT_CONSENT_TEXT } from "./consent";
 import { showIntro } from "./onboarding";
 import type { LaunchOptions } from "./pi-launch";
 import type { CatalogModel } from "./provider";
-import type { SelfUpdateOutcome } from "./self-update";
 import type { ClientVersionCheck } from "./update-check";
 import { CLI_VERSION } from "./version";
 import { maybeWhatsNew } from "./whats-new";
@@ -27,18 +26,6 @@ export interface RunDeps {
    * `run()`'s comment for why the ordering matters.
    */
   checkClientVersion: (baseUrl: string, cliVersion: string) => Promise<ClientVersionCheck>;
-  /**
-   * #37 U1: in-place self-update, tried when checkClientVersion reports
-   * "notice" or "block". Injectable (like checkClientVersion) so every gate
-   * is unit-tested with zero real npm calls — see self-update.ts.
-   */
-  maybeSelfUpdate: (action: "notice" | "block", latest: string | undefined) => Promise<SelfUpdateOutcome>;
-  /**
-   * Required-update relaunch (see relaunch.ts): re-runs the CLI as the latest
-   * npm version. Resolves to the child's exit code, or undefined when it did
-   * not (or could not) relaunch. Optional; absent = today's manual message.
-   */
-  relaunchLatest?: (latest: string | undefined) => Promise<number | undefined>;
   /**
    * Starts Gravity's pixel in the background and returns the context getter for
    * the ads extension. Called only once the user has accepted the current
@@ -83,7 +70,7 @@ export const HEADLESS_LOGIN_REQUIRED =
 
 /**
  * Shared pre-launch gate: consent → login → token check → version check →
- * self-update → notices → Gravity pixel. Both the TUI path (run) and the
+ * notices → Gravity pixel. Both the TUI path (run) and the
  * headless ACP path call this, so neither can drift weaker on auth/consent.
  *
  * headless=true changes only the interactive steps: no consent prompt, no
@@ -166,26 +153,17 @@ export async function runPrelaunchGate(
   // or consent was just accepted and loginFlow() just ran, so a version
   // check is always warranted.
   const versionCheck = await deps.checkClientVersion(deps.baseUrl, CLI_VERSION);
-  /** Set when a newer version exists and self-update fell back to notifying. */
+  /** Set when a newer version exists: carried into the session header banner. */
   let updateLatest: string | undefined;
-  if (versionCheck.action !== "ok") {
-    // #37 U1: try an in-place self-update first; only fall back to the
-    // phase-1 notice/hard-stop text when self-update itself falls back.
-    const outcome = await deps.maybeSelfUpdate(versionCheck.action, versionCheck.latest);
-    if (outcome === "updated-exit") return { ok: false, exitCode: 0 };
-    if (outcome === "blocked") {
-      const relaunched = await deps.relaunchLatest?.(versionCheck.latest);
-      if (relaunched !== undefined) return { ok: false, exitCode: relaunched };
-      deps.log("free-pi-cli is below the required minimum version; update with: npx free-pi-cli@latest");
-      return { ok: false, exitCode: 1 };
-    }
-    if (outcome === "notice") {
-      // Carried into the session header as a boxed "Update Available" banner
-      // (header.ts) rather than a log line the TUI immediately scrolls past —
-      // this is free-pi's replacement for pi's own suppressed banner.
-      updateLatest = versionCheck.latest;
-    }
-    // "updated-continue": self-update already logged its own line; proceed.
+  // No self-update: a "block" is always a hard stop with the manual update
+  // message; a "notice" rides into the session header banner (header.ts)
+  // rather than a log line the TUI immediately scrolls past.
+  if (versionCheck.action === "block") {
+    deps.log("free-pi-cli is below the required minimum version; update with: npx free-pi-cli@latest");
+    return { ok: false, exitCode: 1 };
+  }
+  if (versionCheck.action === "notice") {
+    updateLatest = versionCheck.latest;
   }
 
   // 0.2.6: after an update, show what changed once (terminal-only, never enters

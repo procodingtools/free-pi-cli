@@ -17,8 +17,3 @@ export function getCredentialsPath(agentDir: string = getFreePiAgentDir()): stri
 export function getLastSeenVersionPath(agentDir: string = getFreePiAgentDir()): string {
   return join(agentDir, "last-seen-version");
 }
-
-/** #37 U1: the self-update opt-out config file, `~/.free-pi/config.json`. Read-only — never created. */
-export function getConfigPath(): string {
-  return join(homedir(), FREE_PI_DIR_NAME, "config.json");
-}
